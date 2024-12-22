@@ -173,8 +173,7 @@ def generate_png_image(tex_expression: str, file_basename: str) -> None:
 
 # %%
 if __name__ == "__main__":
-    pass
-    # generate_png_image(generate_tex_expression(), "7174")
+    generate_png_image(generate_tex_expression(), "24602")
     # generate_png_image(generate_tex_expression(), "17692")
     # generate_png_image(generate_tex_expression(), "26063")
     # generate_png_image(generate_tex_expression(), "41799")
