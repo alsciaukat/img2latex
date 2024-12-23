@@ -20,16 +20,18 @@ test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE)
 class ConvolutionLayer(nn.Module):
     def __init__(self) -> None:
         super().__init__()
-        self.conv1 = nn.Conv2d(1, 4, kernel_size=(5, 5), stride=(1, 1), padding=1)
-        self.conv2 = nn.Conv2d(4, 16, kernel_size=(5, 5), stride=(1, 1), padding=1)
-        self.conv3 = nn.Conv2d(16, 64, kernel_size=(5, 5), stride=(1, 1), padding=1)
-        self.conv4 = nn.Conv2d(64, 128, kernel_size=(5, 5), stride=(1, 1), padding=1)
-        self.conv5 = nn.Conv2d(128, 256, kernel_size=(5, 5), stride=(1, 1), padding=1)
-        self.conv6 = nn.Conv2d(256, 512, kernel_size=(5, 5), stride=(1, 1), padding=1)
-        self.conv7 = nn.Conv2d(512, 1024, kernel_size=(5, 5), stride=(1, 1), padding=1)
-        self.conv8 = nn.Conv2d(1024, 2048, kernel_size=(3, 3), stride=(1, 1), padding=1)
+        self.conv1 = nn.Conv2d(1, 16, kernel_size=(3, 3), stride=(1, 1), padding=1)
+        self.conv2 = nn.Conv2d(16, 64, kernel_size=(3, 3), stride=(1, 1), padding=1)
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=(3, 3), stride=(1, 1), padding=1)
+        self.conv4 = nn.Conv2d(128, 256, kernel_size=(3, 3), stride=(1, 1), padding=1)
+        self.conv5 = nn.Conv2d(256, 512, kernel_size=(3, 3), stride=(1, 1), padding=1)
+        self.conv6 = nn.Conv2d(512, 1024, kernel_size=(3, 3), stride=(1, 1), padding=1)
+        self.conv7 = nn.Conv2d(1024, 2048, kernel_size=(3, 3), stride=(1, 1), padding=1)
+        self.conv8 = nn.Conv2d(2048, 4096, kernel_size=(3, 3), stride=(1, 1), padding=1)
+        self.conv9 = nn.Conv2d(4096, 8192, kernel_size=(3, 3), stride=(1, 1), padding=1)
 
         self.pool = nn.MaxPool2d(kernel_size=(2, 2), stride=(2, 2))
+        self.pool_ceil = nn.MaxPool2d(kernel_size=(2, 2), stride=(2, 2), ceil_mode=True)
 
         self.relu = nn.ReLU()
    
@@ -63,6 +65,11 @@ class ConvolutionLayer(nn.Module):
         image = self.relu(image)
        
         image = self.conv8(image)
+        image = self.pool_ceil(image) # 2x2
+        image = self.relu(image)
+
+        image = self.conv9(image)
+        image = self.pool(image) # 1x1
         image = self.relu(image)
        
         return image
@@ -71,24 +78,20 @@ class ConvolutionLayer(nn.Module):
 class LSTMCellLayer(nn.Module):
     def __init__(self):
         super().__init__()
-        self.rnn_cell1 = nn.LSTMCell(input_size=2048*2, hidden_size=512)
-        self.rnn_cell2 = nn.LSTMCell(input_size=512, hidden_size=256)
-        self.rnn_cell3 = nn.LSTMCell(input_size=256, hidden_size=128)
-        self.linear1 = nn.Linear(512, 256)
-        self.linear2 = nn.Linear(256, 128)
-        self.linear3 = nn.Linear(128, 108)
+        self.rnn_cell = nn.LSTMCell(input_size=8192, hidden_size=2048)
+        self.linear1 = nn.Linear(2048, 512)
+        self.linear2 = nn.Linear(512, 108)
 
-    def forward(self, features, h0, c0, h1, c1, h2, c2, eot):
+    def forward(self, features, h0, c0, eot):
         if eot.sum() == len(eot):
-            return torch.tensor([0.]*107 + [1.]).repeat(len(eot), 1), h0, c0, h1, c1, h2, c2
-        h0, c0 = self.rnn_cell1(features, (h0, c0))
-        h1, c1 = self.rnn_cell2(h0, (h1, c1))
-        h2, c2 = self.rnn_cell3(h1, (h2, c2))
-        output = self.linear3(h2)
+            return torch.tensor([0.]*107 + [1.]).repeat(len(eot), 1), h0, c0
+        h0, c0 = self.rnn_cell(features, (h0, c0))
+        output = self.linear1(h0)
+        output = self.linear2(output)
         passive_filter = (torch.ones(len(eot)) - eot).unsqueeze(1).kron(torch.ones(108))
         active_filter = eot.unsqueeze(1).kron(torch.tensor([0.]*107 + [1.]))  # (Nx) 108
         output = output * active_filter + output * passive_filter
-        return output, h0, c0, h1, c1, h2, c2  # (Nx) 108, (Nx) 256, (Nx) 128
+        return output, h0, c0  # (Nx) 108, (Nx) 256, (Nx) 128
 
 
 class RNNLayer(nn.Module):
@@ -97,19 +100,15 @@ class RNNLayer(nn.Module):
         self.lstm_cell = LSTMCellLayer()
 
     def forward(self, features):
-        features = features.reshape(len(features), 2048*2)
-        h0 = torch.zeros(len(features), 512)
-        c0 = torch.zeros(len(features), 512)
-        h1 = torch.zeros(len(features), 256)
-        c1 = torch.zeros(len(features), 256)
-        h2 = torch.zeros(len(features), 128)
-        c2 = torch.zeros(len(features), 128)
+        features = features.reshape(len(features), 8192)
+        h0 = torch.zeros(len(features), 2048)
+        c0 = torch.zeros(len(features), 2048)
         eot = torch.zeros(len(features))
 
         tokens = torch.Tensor(torch.Size((len(features), 108, 0)))
 
         for i in range(40):
-            output, h0, c0, h1, c1, h2, c2 = self.lstm_cell(features, h0, c0, h1, c1, h2, c2, eot)
+            output, h0, c0 = self.lstm_cell(features, h0, c0, eot)
 
             eot = (output.argmax(dim=1) == 107).type(torch.float)
 
@@ -138,7 +137,7 @@ class Image2LaTeX(nn.Module):
 
 model = Image2LaTeX()
 loss_function = nn.CrossEntropyLoss()
-optimizer = optim.SGD(model.parameters(), lr=1e-3)
+optimizer = optim.AdamW(model.parameters(), lr=1e-3)
 
 
 def debug(dataloader, model):
@@ -147,7 +146,6 @@ def debug(dataloader, model):
         pred = model(image)
         print(pred)
         print(pred.argmax(dim=1))
-        print(tokens)
         if i == 0:
             break
 
@@ -162,9 +160,12 @@ def train(dataloader, model, loss_function, optimizer):
         optimizer.step()
         optimizer.zero_grad()
 
-        if batch_number % 20 == 0:
+        if batch_number % 40 == 0:
             loss, current = loss.item(), (batch_number + 1)*len(image)
             print(f"loss: {loss:>5f}, {current:>5f}/{size:>5f}")
+            print(pred)
+            print(pred.argmax(dim=1))
+            print(tokens)
 
 
 def test(dataloader, model, loss_function):
@@ -177,9 +178,6 @@ def test(dataloader, model, loss_function):
             pred = model(image)
             test_loss += loss_function(pred, tokens).item()
             correct += (pred.argmax(dim=1) == tokens).type(torch.float).sum().item()/40
-            if i % 10 == 0:
-                print(pred.argmax(dim=1))
-                print(tokens)
 
     test_loss /= number_batch
     correct /= size
@@ -188,8 +186,8 @@ def test(dataloader, model, loss_function):
 
 # %%
 
-epochs = 5
-model.load_state_dict(torch.load("./model_state", weights_only=True))
+epochs = 1
+# model.load_state_dict(torch.load("./model_state", weights_only=True))
 
 # debug(test_dataloader, model)
 
